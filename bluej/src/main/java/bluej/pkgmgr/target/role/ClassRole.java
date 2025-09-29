@@ -287,27 +287,6 @@ public abstract class ClassRole
     {}
 
     /**
-     * Get all the files belonging to a class target - source, class, ctxt, docs
-     * @param ct  The class target
-     * @return  A list of File objects
-     */
-    public List<File> getAllFiles(ClassTarget ct)
-    {
-        // .frame (if available), .java, .class, .ctxt, and doc (.html)
-        List<File> rlist = new ArrayList<>();
-
-        rlist.add(ct.getClassFile());
-        rlist.addAll(Utility.mapList(ct.getAllSourceFilesJavaLast(), sf -> sf.file));
-        rlist.add(ct.getContextFile());
-        rlist.add(ct.getDocumentationFile());
-
-        File [] innerClasses = ct.getInnerClassFiles();
-        Collections.addAll(rlist, innerClasses);
-
-        return rlist;
-    }
-
-    /**
      * True if this can be converted to Stride (assuming Java source is available;
      * this method does not need to check for that).  Returns false for unsupported
      * class types, like enums or unit tests.

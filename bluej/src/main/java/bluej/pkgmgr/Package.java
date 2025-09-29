@@ -22,9 +22,7 @@
 package bluej.pkgmgr;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.lang.reflect.Modifier;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -2758,9 +2756,8 @@ public final class Package
                         ClassInfo info = t.getSourceInfo().getInfo(t.getJavaSourceFile(), t.getPackage());
 
                         if (info != null) {
-                            OutputStream out = new FileOutputStream(t.getContextFile());
-                            info.getComments().store(out, "BlueJ class context");
-                            out.close();
+                            // Use ClassTarget method to create and save context
+                            t.updateMetadata(info);
                         }
                     }
                     catch (Exception ex) {

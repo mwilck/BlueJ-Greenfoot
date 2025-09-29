@@ -21,13 +21,15 @@
  */
 package bluej.views;
 
-import java.io.InputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.*;
 
 import bluej.debugger.gentype.GenTypeDeclTpar;
+import bluej.parser.context.CommentEntry;
+import bluej.parser.context.CompilationUnitContext;
+import bluej.parser.context.CompilationUnitContextLoader;
 import bluej.utility.JavaNames;
 import bluej.utility.JavaUtils;
 import threadchecker.OnThread;
@@ -57,6 +59,12 @@ public class View
     protected Comment comment;
 
     private static Map<Class<?>,View> views = new HashMap<Class<?>,View>();
+    
+    /**
+     * Shared loader for compilation unit contexts, caches resolved contexts
+     */
+    private static final CompilationUnitContextLoader contextLoader =
+        new CompilationUnitContextLoader(true);
 
     /**
      * Return a view of a class.
@@ -86,6 +94,7 @@ public class View
     /**
      * Remove from the view cache, all views of classes
      * which were loaded by the given class loader.
+     * Also clears any cached contexts for those classes.
      * This method is thread-safe.
      */
     public static void removeAll(ClassLoader loader)
@@ -97,6 +106,8 @@ public class View
                 View v = it.next();
 
                 if (v.getClassLoader() == loader) {
+                    // Clear the cached context for this class
+                    contextLoader.evictFromCache(v.getQualifiedName());
                     it.remove();
                 }
             }
@@ -453,57 +464,69 @@ public class View
         if(curview.getSuper() != null)
             loadClassComments(curview.getSuper(), table);
 
-        CommentList comments = null;
-        String filename = curview.getQualifiedName().replace('.', '/') + ".ctxt";
-
         try {
-            InputStream in = null;
-
-            if (curview.cl.getClassLoader() == null) {
-                in = ClassLoader.getSystemResourceAsStream(filename);
+            // Use the shared loader's contextForClass(Class<?>) method which automatically
+            // handles different classloaders for each class in the hierarchy
+            CompilationUnitContext context = contextLoader.contextForClass(curview.cl);
+            
+            if (context != null) {
+                // Match up the comments with the members of this view
+                for (CommentEntry entry : context.getComments()) {
+                    String target = entry.getTarget();
+                    
+                    if (target.startsWith("class ") || target.startsWith("interface ")) {
+                        // We only want to set a class comment on our base class, not for our supers
+                        if (curview == this) {
+                            // Convert CommentEntry to Comment for backward compatibility
+                            Comment c = convertToComment(entry);
+                            setComment(c);
+                        }
+                        continue;
+                    }
+                    
+                    MemberView m = table.get(target);
+                    
+                    if (m != null) {
+                        // Convert CommentEntry to Comment for backward compatibility
+                        Comment c = convertToComment(entry);
+                        m.setComment(c);
+                    }
+                    // Removed debug messages for cleaner code
+                }
             }
-            else {
-                in = curview.cl.getClassLoader().getResourceAsStream(filename);
-            }
-
-            if(in != null) {
-                comments = new CommentList();
-                comments.load(in);
-                in.close();
-            }
-            //else
-            //    Debug.message("Failed to load .ctxt file " + filename);
-
-        } catch(Exception e) {
+            // Removed debug message for missing .ctxt file
+            
+        } catch (Exception e) {
+            // Maintain existing error handling behavior
             e.printStackTrace();
         }
-
-        if(comments != null) {
-            // match up the comments read from the file with the members of this view
-            for(Iterator<Comment> it = comments.getComments(); it.hasNext(); ) {
-                Comment c = it.next();
-
-                if(c.getTarget().startsWith("class ") ||
-                   c.getTarget().startsWith("interface ")) {
-                    // we only want to set a class comment on our base class, not for
-                    // our supers
-                    if (curview == this)
-                        setComment(c);
-                    continue;
-                }
-
-                MemberView m = table.get(c.getTarget());
-
-                if(m == null) {
-                    //Debug.message("No member found for " + c.getTarget() + " in file " + filename);
-                    continue;
-                }
-                else {
-                    //Debug.message("Found member for " + c.getTarget() + " in file " + filename);
-                    m.setComment(c);
-                }
-            }
+    }
+    
+    /**
+     * Converts a CompilationUnitContext.CommentEntry to a Comment object
+     * for backward compatibility with existing code.
+     *
+     * @param entry The CommentEntry to convert
+     * @return A Comment object with the same data
+     */
+    private Comment convertToComment(CommentEntry entry)
+    {
+        Comment comment = new Comment();
+        
+        // Build a Properties object to use the existing Comment.load() method
+        Properties props = new Properties();
+        props.setProperty(".target", entry.getTarget());
+        
+        if (entry.getText() != null) {
+            props.setProperty(".text", entry.getText());
         }
+        
+        if (!entry.getParamNames().isEmpty()) {
+            props.setProperty(".params", String.join(" ", entry.getParamNames()));
+        }
+        
+        comment.load(props, "");
+        return comment;
     }
 
     private void addMembers(Map<String,MemberView> table, MemberView[] members)

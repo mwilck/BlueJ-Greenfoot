@@ -44,6 +44,8 @@ import bluej.extmgr.ExtensionMenu;
 import bluej.extmgr.ExtensionsManager;
 import bluej.extmgr.ExtensionsMenuManager;
 import bluej.parser.ParseFailure;
+import bluej.parser.context.CompilationUnitContext;
+import bluej.parser.context.CompilationUnitContextLoader;
 import bluej.parser.entity.EntityResolver;
 import bluej.parser.entity.PackageResolver;
 import bluej.parser.entity.ParsedReflective;
@@ -93,6 +95,7 @@ import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.ImagePattern;
 import javafx.stage.Window;
+import org.jetbrains.annotations.NotNull;
 import threadchecker.OnThread;
 import threadchecker.Tag;
 
@@ -211,6 +214,9 @@ public class ClassTarget extends DependentTarget
     // The body of the class target which goes hashed, etc:
     @OnThread(Tag.FX)
     protected ResizableCanvas canvas;
+    
+    // Static loader for compilation unit contexts
+    private static final CompilationUnitContextLoader contextLoader = new CompilationUnitContextLoader(true);
 
     /**
      * Create a new class target in package 'pkg'.
@@ -233,6 +239,10 @@ public class ClassTarget extends DependentTarget
     public ClassTarget(Package pkg, String baseName, String template)
     {
         super(pkg, baseName, "Class");
+
+        // Register project root with the static context loader
+        // TODO:
+        contextLoader.addPackageRoot(pkg.getProject().getProjectDir().toPath());
 
         if (pseudos == null)
         {
@@ -1196,11 +1206,23 @@ public class ClassTarget extends DependentTarget
     }
 
     /**
-     * @return the name of the context(.ctxt) file this target corresponds to.
+     * Creates and saves a compilation unit context from ClassInfo.
+     * This method is used to update the context with new information from the parser.
+     *
+     * @param info The ClassInfo from the parser
+     * @throws IOException if an I/O error occurs while saving
      */
-    public File getContextFile()
-    {
-        return new File(getPackage().getPath(), getBaseName() + ".ctxt");
+    public void updateMetadata(@NotNull ClassInfo info) throws IOException {
+        contextLoader.updateContextFromClassInfo(getQualifiedName(), info);
+    }
+
+    /**
+     * Invalidates the cached compilation unit context, forcing it to be reloaded
+     * on the next access. This should be called when the class is recompiled
+     * or when the .ctxt file may have been updated.
+     */
+    public void invalidateCompilationContext() {
+        contextLoader.evictFromCache(getQualifiedName());
     }
 
     /**
@@ -1208,7 +1230,17 @@ public class ClassTarget extends DependentTarget
      */
     public File getClassFile()
     {
-        return new File(getPackage().getPath(), getBaseName() + ".class");
+        return getPackageFile(getBaseName() + ".class");
+    }
+
+    /**
+     * Helper method to create a file in the package directory with the given name.
+     * 
+     * @param fileName The name of the file (including extension)
+     * @return File object pointing to the file in the package directory
+     */
+    private File getPackageFile(String fileName) {
+        return new File(getPackage().getPath(), fileName);
     }
 
     /**
@@ -1439,6 +1471,11 @@ public class ClassTarget extends DependentTarget
         ClassInfo info = analyseSource();
         if (info != null) {
             updateTargetFile(info);
+            try {
+                updateMetadata(info);
+            } catch (IOException e) {
+                Debug.reportError("Failed to save context file for class: " + getQualifiedName(), e);
+            }
         }
         determineRole(null);
     }
@@ -1547,7 +1584,7 @@ public class ClassTarget extends DependentTarget
 
     /**
      * Called when this class target has just been successfully compiled.
-     * 
+     *
      * We load the compiled class if possible and check if the compilation has
      * resulted in it taking a different role (ie abstract to applet)
      */
@@ -1558,6 +1595,9 @@ public class ClassTarget extends DependentTarget
         determineRole(cl);
         analyseDependencies(cl);
         analyseTypeParams(cl);
+        
+        // Invalidate compilation context as .ctxt file may have been updated
+        invalidateCompilationContext();
     }
 
     /**
@@ -1971,7 +2011,7 @@ public class ClassTarget extends DependentTarget
         }
 
         File oldJavaSourceFile  = getJavaSourceFile();
-        File newJavaSourceFile = new File(getPackage().getPath(), newName + "." + SourceType.Java.toString().toLowerCase());
+        File newJavaSourceFile = getPackageFile(newName + "." + SourceType.Java.toString().toLowerCase());
 
         try {
             String filename;
@@ -1980,7 +2020,7 @@ public class ClassTarget extends DependentTarget
             getPackage().updateTargetIdentifier(this, getIdentifierName(), newName);
 
             if (getSourceType().equals(SourceType.Stride)) {
-                newFrameSourceFile = new File(getPackage().getPath(), newName + "." + SourceType.Stride.toString().toLowerCase());
+                newFrameSourceFile = getPackageFile(newName + "." + SourceType.Stride.toString().toLowerCase());
                 oldFrameSourceFile = getFrameSourceFile();
                 FileUtility.copyFile(oldFrameSourceFile, newFrameSourceFile);
                 filename = newFrameSourceFile.getAbsolutePath();
@@ -1995,16 +2035,7 @@ public class ClassTarget extends DependentTarget
             String docFilename = getPackage().getProject().getDocumentationFile(javaFilename);
             getEditor().changeName(newName, filename, javaFilename, docFilename);
 
-            deleteSourceFiles();
-            getClassFile().delete();
-            // Delete subclass files like Foo$1.class, Foo$Inner.class
-            for (File innerClassFile : getInnerClassFiles())
-            {
-                innerClassFile.delete();
-            }
-
-            getContextFile().delete();
-            getDocumentationFile().delete();
+            removeGeneratedFiles();
 
             // this is extremely dangerous code here.. must track all
             // variables which are set when ClassTarget is first
@@ -2046,17 +2077,6 @@ public class ClassTarget extends DependentTarget
         nameLabel.setText(newDisplayName);
         setDisplayName(newDisplayName);
         updateAccessibleName();
-    }
-
-    /**
-     * Delete all the source files (edited and generated) for this target.
-     */
-    private void deleteSourceFiles()
-    {
-        if (getSourceType().equals(SourceType.Stride)) {
-            getJavaSourceFile().delete();
-        }
-        getSourceFile().delete();
     }
 
     /**
@@ -2394,19 +2414,21 @@ public class ClassTarget extends DependentTarget
         removeAllInDependencies();
         removeAllOutDependencies();
         // remove associated files (.frame, .class, .java and .ctxt)
-        prepareFilesForRemoval();
+        removeGeneratedFiles();
     }
 
     /**
-     * Removes applicable files (.class, .java and .ctxt) prior to this
-     * ClassTarget being removed from a Package.
+     * Removes all files generated during the processing of a given class.
+     * This includes class files, documentation files, contextual files, source files,
+     * and inner class files related to the base name of the target.
      */
-    public void prepareFilesForRemoval()
+    public void removeGeneratedFiles()
     {
-        List<File> allFiles = getRole().getAllFiles(this);
-        for(Iterator<File> i = allFiles.iterator(); i.hasNext(); ) {
-            i.next().delete();
-        }
+        getClassFile().delete();
+        getDocumentationFile().delete();
+        getPackageFile(getBaseName() + ".ctxt").delete();
+        getAllSourceFilesJavaLast().forEach(info -> info.file.delete());
+        Arrays.stream(getInnerClassFiles()).forEach(File::delete);
     }
 
     @Override
