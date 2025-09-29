@@ -214,9 +214,6 @@ public class ClassTarget extends DependentTarget
     // The body of the class target which goes hashed, etc:
     @OnThread(Tag.FX)
     protected ResizableCanvas canvas;
-    
-    // Static loader for compilation unit contexts
-    private static final CompilationUnitContextLoader contextLoader = new CompilationUnitContextLoader(true);
 
     /**
      * Create a new class target in package 'pkg'.
@@ -239,10 +236,6 @@ public class ClassTarget extends DependentTarget
     public ClassTarget(Package pkg, String baseName, String template)
     {
         super(pkg, baseName, "Class");
-
-        // Register project root with the static context loader
-        // TODO:
-        contextLoader.addPackageRoot(pkg.getProject().getProjectDir().toPath());
 
         if (pseudos == null)
         {
@@ -1213,7 +1206,7 @@ public class ClassTarget extends DependentTarget
      * @throws IOException if an I/O error occurs while saving
      */
     public void updateMetadata(@NotNull ClassInfo info) throws IOException {
-        contextLoader.updateContextFromClassInfo(getQualifiedName(), info);
+        this.getPackage().getProject().updateClassMetadata(getQualifiedName(), info);
     }
 
     /**
@@ -1222,7 +1215,7 @@ public class ClassTarget extends DependentTarget
      * or when the .ctxt file may have been updated.
      */
     public void invalidateCompilationContext() {
-        contextLoader.evictFromCache(getQualifiedName());
+        this.getPackage().getProject().evictFromCache(getQualifiedName());
     }
 
     /**

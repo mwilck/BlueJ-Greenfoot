@@ -61,12 +61,6 @@ public class View
     protected Comment comment;
 
     private static Map<Class<?>,View> views = new HashMap<Class<?>,View>();
-    
-    /**
-     * Shared loader for compilation unit contexts, caches resolved contexts
-     */
-    private static final CompilationUnitContextLoader contextLoader =
-        new CompilationUnitContextLoader(true);
 
     /**
      * Return a view of a class.
@@ -104,12 +98,10 @@ public class View
         synchronized (views) {
             Iterator<View> it = views.values().iterator();
 
-            while(it.hasNext()) {
+            while (it.hasNext()) {
                 View v = it.next();
 
                 if (v.getClassLoader() == loader) {
-                    // Clear the cached context for this class
-                    contextLoader.evictFromCache(v.getQualifiedName());
                     it.remove();
                 }
             }
@@ -470,35 +462,32 @@ public class View
         try {
             // Use the shared loader's contextForClass(Class<?>) method which automatically
             // handles different classloaders for each class in the hierarchy
-            CompilationUnitContext context = contextLoader.contextForClass(curview.cl);
+            CompilationUnitContext context = this.project.contextForClass(curview.cl);
             
-            if (context != null) {
-                // Match up the comments with the members of this view
-                for (CommentEntry entry : context.getComments()) {
-                    String target = entry.getTarget();
-                    
-                    if (target.startsWith("class ") || target.startsWith("interface ")) {
-                        // We only want to set a class comment on our base class, not for our supers
-                        if (curview == this) {
-                            // Convert CommentEntry to Comment for backward compatibility
-                            Comment c = convertToComment(entry);
-                            setComment(c);
-                        }
-                        continue;
-                    }
-                    
-                    MemberView m = table.get(target);
-                    
-                    if (m != null) {
+            // Match up the comments with the members of this view
+            for (CommentEntry entry : context.getComments()) {
+                String target = entry.getTarget();
+
+                if (target.startsWith("class ") || target.startsWith("interface ")) {
+                    // We only want to set a class comment on our base class, not for our supers
+                    if (curview == this) {
                         // Convert CommentEntry to Comment for backward compatibility
                         Comment c = convertToComment(entry);
-                        m.setComment(c);
+                        setComment(c);
                     }
-                    // Removed debug messages for cleaner code
+                    continue;
                 }
+
+                MemberView m = table.get(target);
+
+                if (m != null) {
+                    // Convert CommentEntry to Comment for backward compatibility
+                    Comment c = convertToComment(entry);
+                    m.setComment(c);
+                }
+                // Removed debug messages for cleaner code
             }
-            // Removed debug message for missing .ctxt file
-            
+
         } catch (Exception e) {
             // Maintain existing error handling behavior
             e.printStackTrace();

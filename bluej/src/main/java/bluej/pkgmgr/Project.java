@@ -50,7 +50,11 @@ import bluej.groupwork.ui.CommitAndPushFrame;
 import bluej.groupwork.ui.StatusFrame;
 import bluej.groupwork.ui.TeamSettingsDialog;
 import bluej.groupwork.ui.UpdateFilesFrame;
+import bluej.parser.context.ClassLoaderProvider;
+import bluej.parser.context.CompilationUnitContext;
+import bluej.parser.context.CompilationUnitContextLoader;
 import bluej.parser.entity.EntityResolver;
+import bluej.parser.symtab.ClassInfo;
 import bluej.pkgmgr.target.ClassTarget;
 import bluej.pkgmgr.target.Target;
 import bluej.prefmgr.PrefMgr;
@@ -82,6 +86,7 @@ import javafx.scene.shape.Rectangle;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 import javafx.util.Duration;
+import org.jetbrains.annotations.NotNull;
 import threadchecker.OnThread;
 import threadchecker.Tag;
 
@@ -103,7 +108,7 @@ import java.util.concurrent.CompletableFuture;
  * @author  Andrew Patterson
  * @author  Bruce Quig
  */
-public class Project implements DebuggerListener, DebuggerThreadListener, InspectorManager
+public class Project implements DebuggerListener, DebuggerThreadListener, InspectorManager, ClassLoaderProvider
 {
     public static final int NEW_PACKAGE_DONE = 0;
     public static final int NEW_PACKAGE_EXIST = 1;
@@ -171,6 +176,9 @@ public class Project implements DebuggerListener, DebuggerThreadListener, Inspec
     /** If empty, not checked yet */
     @OnThread(value = Tag.Any, requireSynchronized = true)
     private Optional<Boolean> isSharedProject = Optional.empty();
+
+    // Loader of compilation unit metadata (e.g. comments or Kotlin property definitions)
+    private CompilationUnitContextLoader contextLoader;
 
     // Indicator of SVN shared project, which is no longer supported from BlueJ 5
     private boolean isSharedSVNProject = false;
@@ -378,6 +386,8 @@ public class Project implements DebuggerListener, DebuggerThreadListener, Inspec
         // As we may have added new targets, we make sure the new targets are placed correctly in this package
         // this also fixes the placement of CSS targets when added directly in the file system, in the current package
         currPackage.setEditor(currPackage.getEditor());
+
+        this.contextLoader = new CompilationUnitContextLoader(this);
     }
 
     /**
@@ -1300,6 +1310,50 @@ public class Project implements DebuggerListener, DebuggerThreadListener, Inspec
     }
 
     /**
+     * Get compilation context for this FQDN
+     *
+     * @param qualifiedName the FQDN of the class to get the context for
+     * @return the CompilationUnitContext
+     */
+    @NotNull public CompilationUnitContext contextForClass(String qualifiedName) {
+        return this.contextLoader.contextForClass(qualifiedName);
+    }
+
+    /**
+     * Get compilation context for this Class instance
+     *
+     * @param clazz the Class instance of the class to get the context for
+     * @return the CompilationUnitContext
+     */
+    @NotNull public CompilationUnitContext contextForClass(@NotNull Class<?> clazz) {
+        return this.contextLoader.contextForClass(clazz);
+    }
+
+    /**
+     * Update metadata for this class
+     *
+     * @param qualifiedName the FQDN of the class to get the context for
+     * @param info the ClassInfo to use to update the metadata
+     *
+     * @return the CompilationUnitContext
+     */
+    @NotNull public CompilationUnitContext updateClassMetadata(@NotNull String qualifiedName, @NotNull ClassInfo info) {
+        return this.contextLoader.updateContextFromClassInfo(qualifiedName, info);
+    }
+
+    /**
+     * Clear compilation unit cache
+     *
+     * @param qualifiedName the FQDN to remove from the cache
+     *
+     * @return whether the class was cached
+     */
+    public boolean evictFromCache(@NotNull String qualifiedName) {
+        return this.contextLoader.evictFromCache(qualifiedName);
+    }
+
+
+    /**
      * This creates package directories. For the given package, all
      * intermediate package directories (which do not already exist)
      * will be created. A bluej.pkg file will be created for each
@@ -1661,6 +1715,9 @@ public class Project implements DebuggerListener, DebuggerThreadListener, Inspec
         if (currentClassLoader == null) {
             return;
         }
+
+        // Clear the compilation metadata cache
+        contextLoader.clearCache();
 
         clearObjectBenches();
 

@@ -23,6 +23,7 @@
 package bluej.parser.context;
 
 import bluej.parser.symtab.ClassInfo;
+import bluej.pkgmgr.Project;
 import javafx.application.Platform;
 import org.jetbrains.annotations.NotNull;
 
@@ -32,7 +33,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Properties;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -44,91 +44,79 @@ import java.util.concurrent.ConcurrentHashMap;
 public class CompilationUnitContextLoader implements AutoCloseable {
     
     /** The primary classloader to use for loading resources */
-    @NotNull private final ClassLoader primaryLoader;
+    private ClassLoader projectClassLoader;
 
     /** Package roots for project classes */
-    private final Set<Path> packageRoots = ConcurrentHashMap.newKeySet();
+    private Path packageRoot;
 
     /** Cache for loaded contexts, null if caching is disabled */
     private final ConcurrentHashMap<String, CompilationUnitContext> cache;
-    
-    /** Whether caching is enabled for this loader */
-    private final boolean cachingEnabled;
-    
-    /**
-     * Creates a new loader with the specified classloader.
-     * Caching is enabled by default.
-     * 
-     * @param classLoader The classloader to use
-     */
-    public CompilationUnitContextLoader(@NotNull ClassLoader classLoader) {
-        this(classLoader, true);
-    }
+
+    /** The provider for ClassLoader and project directory */
+    private final ClassLoaderProvider provider;
 
 
     /**
-     * Creates a new loader with the specified classloader and caching option.
-     * 
-     * @param classLoader The classloader to use
-     * @param enableCaching Whether to cache loaded contexts for performance
-     */
-    public CompilationUnitContextLoader(@NotNull ClassLoader classLoader, boolean enableCaching) {
-        this.primaryLoader = classLoader;
-        this.cachingEnabled = enableCaching;
-        this.cache = enableCaching ? new ConcurrentHashMap<>() : null;
-    }
-
-
-    /**
-     * Creates a new loader with the system classloader and caching option.
+     * Production constructor - maintains backward compatibility.
      *
-     * @param enableCaching Whether to cache loaded contexts for performance
+     * @param project The Project to load contexts for
      */
-    public CompilationUnitContextLoader(boolean enableCaching) {
-        this(ClassLoader.getSystemClassLoader(), enableCaching);
-    }
-
-    /**
-     * Adds a package root to the loader.
-     * This allows the loader to resolve classes in different package directories.
-     *
-     * @param packageRoot The root directory for a package
-     */
-    public void addPackageRoot(@NotNull Path packageRoot) {
-        if (Files.exists(packageRoot) && Files.isDirectory(packageRoot)) {
-            packageRoots.add(packageRoot.toAbsolutePath());
-        }
+    public CompilationUnitContextLoader(Project project) {
+        this((ClassLoaderProvider) project);
     }
 
 
     /**
-     * Removes a package root from the loader.
+     * Package-private constructor for testing.
+     * Allows injection of a test ClassLoaderProvider implementation.
      *
-     * @param packageRoot The root directory to remove
+     * @param provider The ClassLoaderProvider to use for loading contexts
      */
-    public void removePackageRoot(@NotNull Path packageRoot) {
-        packageRoots.remove(packageRoot.toAbsolutePath());
+    CompilationUnitContextLoader(ClassLoaderProvider provider) {
+        this.provider = provider;
+        this.cache = new ConcurrentHashMap<>();
+    }
+
+
+    /**
+     * Returns the classloader used by the project this context loader handles.
+     *
+     * @return the ClassLoader
+     */
+    @NotNull synchronized protected ClassLoader getClassLoader() {
+        if (this.projectClassLoader != null) { return this.projectClassLoader; }
+
+        return (this.projectClassLoader = this.provider.getClassLoader());
+    }
+
+
+    /**
+     * Returns the root project path for the project this context loader handles.
+     *
+     * @return the Path for package root
+     */
+    @NotNull synchronized protected Path getPackageRoot() {
+        if (this.packageRoot != null) { return this.packageRoot; }
+
+        return (this.packageRoot = this.provider.getProjectDir().toPath());
     }
 
 
     /**
      * Loads a CompilationUnitContext for a class with caching.
-     * This method searches through all registered package roots to find
-     * the .ctxt file and handles the case where the file doesn't exist
-     * by returning an empty context.
+     * This method searches through all registered package roots to find the .ctxt file and handles the case where
+     * the file doesn't exist by returning an empty context.
      *
      * @param qualifiedName The fully qualified class name
      *
      * @return A CompilationUnitContext
      */
     @NotNull public CompilationUnitContext contextForClass(@NotNull String qualifiedName) {
-        CompilationUnitContext context = resolveFromResources(this.primaryLoader, qualifiedName);
+        CompilationUnitContext context = resolveFromResources(getClassLoader(), qualifiedName);
 
-        if (context != null) {
-            return context;
-        }
+        if (context != null) { return context; }
 
-        context = resolveFromPackageRoots(qualifiedName);
+        context = resolveFromPackageRoot(qualifiedName);
 
         return context != null
             ? context
@@ -153,12 +141,10 @@ public class CompilationUnitContextLoader implements AutoCloseable {
         if (specificClassLoader != null) {
             CompilationUnitContext context = resolveFromResources(specificClassLoader, qualifiedName);
 
-            if (context != null) {
-                return context;
-            }
+            if (context != null) { return context; }
         }
 
-        // Fall back to class-specific loader
+        // Fall back to project classloader
         return contextForClass(qualifiedName);
     }
 
@@ -176,11 +162,9 @@ public class CompilationUnitContextLoader implements AutoCloseable {
 
         URL resource = loader.getResource(resourcePath.toString());
 
-        if (resource != null) {
-            return loadContextFromFile(new File(resource.getFile()), qualifiedName);
-        }
-
-        return null;
+        return (resource != null)
+            ? loadContextFromFile(new File(resource.getFile()), qualifiedName)
+            : null;
     }
 
 
@@ -207,26 +191,13 @@ public class CompilationUnitContextLoader implements AutoCloseable {
      * 
      * @return a compilation unit context for this class, or null if not present
      */
-    private CompilationUnitContext resolveFromPackageRoots(@NotNull String qualifiedName) {
-        if (packageRoots.isEmpty()) {
-            return null;
-        }
-
+    private CompilationUnitContext resolveFromPackageRoot(@NotNull String qualifiedName) {
         Path resourcePath = constructContextFilePath(qualifiedName);
+        Path path = getPackageRoot().resolve(resourcePath);
 
-        for (Path packageRoot : packageRoots) {
-            Path path = packageRoot.resolve(resourcePath);
-
-            if (Files.exists(path)) {
-                CompilationUnitContext context = loadContextFromFile(path.toFile(), qualifiedName);
-
-                if (context != null) {
-                    return context;
-                }
-            }
-        }
-
-        return null;
+        return (Files.exists(path))
+            ? loadContextFromFile(path.toFile(), qualifiedName)
+            : null;
     }
 
 
@@ -239,10 +210,6 @@ public class CompilationUnitContextLoader implements AutoCloseable {
      * @return a compilation unit context loaded from this file
      */
     private CompilationUnitContext loadContextFromFile(@NotNull File file, @NotNull String qualifiedName) {
-        if (!cachingEnabled || cache == null) {
-            return PropertyContextFormat.fromFile(qualifiedName, file);
-        }
-
         return cache.computeIfAbsent(qualifiedName, key -> PropertyContextFormat.fromFile(qualifiedName, file));
     }
 
@@ -259,15 +226,13 @@ public class CompilationUnitContextLoader implements AutoCloseable {
     @NotNull public CompilationUnitContext updateContextFromClassInfo(@NotNull String qualifiedName, @NotNull ClassInfo info) {
         // Extract ClassInfo data first (handles FX thread requirements)
         ClassInfoData data = extractClassInfoData(info);
-
         CompilationUnitContext context = CompilationUnitContext.readOnly(data.className);
-
-        context.setComments(PropertyContextFormat.fromProperties(data.comments));
-
         Path contextFilePath = constructContextFilePath(qualifiedName);
 
         try {
             File contextFile = contextFilePath.toFile();
+
+            context.setComments(PropertyContextFormat.fromProperties(data.comments));
 
             PropertyContextFormat.writeToFile(context, contextFile);
         } catch (IOException ioe) {
@@ -290,13 +255,7 @@ public class CompilationUnitContextLoader implements AutoCloseable {
      * @return true if an entry was removed from cache, false otherwise
      */
     public boolean evictFromCache(@NotNull String qualifiedName) {
-        boolean evicted = false;
-
-        if (cachingEnabled) {
-            cache.remove(qualifiedName);
-        }
-
-        return evicted;
+        return cache.remove(qualifiedName) != null;
     }
 
 
@@ -308,9 +267,7 @@ public class CompilationUnitContextLoader implements AutoCloseable {
      * are accessing the cache.
      */
     public void clearCache() {
-        if (cache != null) {
-            cache.clear();
-        }
+        cache.clear();
     }
 
 
@@ -341,7 +298,7 @@ public class CompilationUnitContextLoader implements AutoCloseable {
         // Need to execute on FX thread
         CompletableFuture<ClassInfoData> future = new CompletableFuture<>();
 
-        Platform.runLater(() -> {
+        Runnable infoGetter = () -> {
             try {
                 String className = info.getName();
                 Properties comments = info.getComments();
@@ -349,9 +306,16 @@ public class CompilationUnitContextLoader implements AutoCloseable {
             } catch (Exception e) {
                 future.completeExceptionally(e);
             }
-        });
+        };
 
         try {
+            if (Platform.isFxApplicationThread()) {
+                infoGetter.run();
+            }
+            else {
+                Platform.runLater(infoGetter);
+            }
+
             return future.get();
         } catch (Exception e) {
             throw new RuntimeException("Failed to extract ClassInfo data", e);

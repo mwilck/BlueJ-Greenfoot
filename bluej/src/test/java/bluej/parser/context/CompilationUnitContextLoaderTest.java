@@ -21,6 +21,8 @@
 */
 package bluej.parser.context;
 
+import bluej.classmgr.BPClassLoader;
+import bluej.pkgmgr.Project;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -62,8 +64,12 @@ public class CompilationUnitContextLoaderTest {
             props.store(out, "test");
         }
 
-        CompilationUnitContextLoader loader = new CompilationUnitContextLoader(ClassLoader.getSystemClassLoader(), true);
-        loader.addPackageRoot(root.toPath());
+        // Use TestClassLoaderProvider instead of trying to create Project instance
+        TestClassLoaderProvider provider = new TestClassLoaderProvider.Builder()
+                .projectDir(root)
+                .build();
+
+        CompilationUnitContextLoader loader = new CompilationUnitContextLoader(provider);
 
         CompilationUnitContext context = loader.contextForClass("example.app.Sample");
 
@@ -79,15 +85,13 @@ public class CompilationUnitContextLoaderTest {
     @Test
     public void contextForClassFallsBackToResource() throws Exception {
         final File resourceFile;
+        final File root = temp.newFolder("resourceRoot");
 
         try {
             Properties props = new Properties();
             props.setProperty("numComments", "1");
             props.setProperty("comment0.target", "int size()");
             props.setProperty("comment0.text", "Returns size");
-
-
-            File root = temp.newFolder("resourceRoot");
 
             File packageDir = new File(root, "cache/demo");
             assertTrue(packageDir.mkdirs());
@@ -99,23 +103,13 @@ public class CompilationUnitContextLoaderTest {
             throw new AssertionError(e);
         }
 
-        ClassLoader resourceLoader = new ClassLoader(null) {
-            @Override
-            public URL getResource(String name) {
-                if ("cache/demo/List.ctxt".equals(name)) {
-                    try {
-                        return resourceFile.toURL();
-                    }
-                    catch (Exception e) {
-                        return null;
-                    }
-                }
+        // Use TestClassLoaderProvider with resource path
+        TestClassLoaderProvider provider = new TestClassLoaderProvider.Builder()
+                .projectDir(root)
+                .withResource(root)
+                .build();
 
-                return null;
-            }
-        };
-
-        CompilationUnitContextLoader loader = new CompilationUnitContextLoader(resourceLoader, true);
+        CompilationUnitContextLoader loader = new CompilationUnitContextLoader(provider);
 
         CompilationUnitContext context = loader.contextForClass("cache.demo.List");
         assertNotNull("Context should be loaded from resource", context);
@@ -166,8 +160,13 @@ public class CompilationUnitContextLoaderTest {
         try (URLClassLoader urlClassLoader = new URLClassLoader(new URL[] { root.toURI().toURL() }, null)) {
             Class<?> clazz = Class.forName("sample.LoaderSubject", true, urlClassLoader);
 
-            CompilationUnitContextLoader loader = new CompilationUnitContextLoader(urlClassLoader, true);
-            loader.addPackageRoot(root.toPath());
+            // Use TestClassLoaderProvider with resource path
+            TestClassLoaderProvider provider = new TestClassLoaderProvider.Builder()
+                    .projectDir(root)
+                    .withResource(root)
+                    .build();
+
+            CompilationUnitContextLoader loader = new CompilationUnitContextLoader(provider);
 
             CompilationUnitContext context = loader.contextForClass(clazz);
             assertNotNull(context);
