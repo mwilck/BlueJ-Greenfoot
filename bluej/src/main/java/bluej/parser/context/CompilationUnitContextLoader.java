@@ -26,6 +26,8 @@ import bluej.parser.symtab.ClassInfo;
 import bluej.pkgmgr.Project;
 import javafx.application.Platform;
 import org.jetbrains.annotations.NotNull;
+import threadchecker.OnThread;
+import threadchecker.Tag;
 
 import java.io.*;
 import java.net.URL;
@@ -281,6 +283,7 @@ public class CompilationUnitContextLoader implements AutoCloseable {
      * <p>This method is idempotent and thread-safe.
      */
     @Override
+    @OnThread(value = Tag.FXPlatform, ignoreParent = true)
     public void close() {
         clearCache();
     }
