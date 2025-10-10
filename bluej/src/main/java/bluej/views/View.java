@@ -21,13 +21,16 @@
  */
 package bluej.views;
 
-import java.io.InputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.*;
 
 import bluej.debugger.gentype.GenTypeDeclTpar;
+import bluej.parser.context.CommentEntry;
+import bluej.parser.context.CompilationUnitContext;
+import bluej.parser.context.CompilationUnitContextLoader;
+import bluej.pkgmgr.Project;
 import bluej.utility.JavaNames;
 import bluej.utility.JavaUtils;
 import threadchecker.OnThread;
@@ -45,7 +48,8 @@ import threadchecker.Tag;
 public class View
 {
     /** The class that this view is for **/
-    protected Class<?> cl;
+    protected final Class<?> cl;
+    protected final Project project;
 
     protected FieldView[] fields;
     protected FieldView[] allFields;
@@ -63,7 +67,7 @@ public class View
      * This is the only way to obtain a View object.
      * This method is thread-safe.
      */
-    public static View getView(Class<?> cl)
+    public static View getView(Class<?> cl, Project project)
     {
         if(cl == null)
             return null;
@@ -73,7 +77,7 @@ public class View
         synchronized (views) {
             View v = views.get(cl);
             if(v == null) {
-                v = new View(cl);
+                v = new View(cl, project);
                 views.put(cl, v);
             }
 
@@ -86,6 +90,7 @@ public class View
     /**
      * Remove from the view cache, all views of classes
      * which were loaded by the given class loader.
+     * Also clears any cached contexts for those classes.
      * This method is thread-safe.
      */
     public static void removeAll(ClassLoader loader)
@@ -93,7 +98,7 @@ public class View
         synchronized (views) {
             Iterator<View> it = views.values().iterator();
 
-            while(it.hasNext()) {
+            while (it.hasNext()) {
                 View v = it.next();
 
                 if (v.getClassLoader() == loader) {
@@ -103,9 +108,10 @@ public class View
         }
     }
 
-    private View(Class<?> cl)
+    private View(Class<?> cl, Project project)
     {
         this.cl = cl;
+        this.project = project;
     }
 
     private ClassLoader getClassLoader()
@@ -145,7 +151,7 @@ public class View
 
     public View getSuper()
     {
-        return getView(cl.getSuperclass());
+        return getView(cl.getSuperclass(), this.project);
     }
 
     public View[] getInterfaces()
@@ -154,7 +160,7 @@ public class View
 
         View[] interfaceViews = new View[interfaces.length];
         for(int i = 0; i < interfaces.length; i++)
-            interfaceViews[i] =  getView(interfaces[i]);
+            interfaceViews[i] =  getView(interfaces[i], this.project);
 
         return interfaceViews;
     }
@@ -453,57 +459,66 @@ public class View
         if(curview.getSuper() != null)
             loadClassComments(curview.getSuper(), table);
 
-        CommentList comments = null;
-        String filename = curview.getQualifiedName().replace('.', '/') + ".ctxt";
-
         try {
-            InputStream in = null;
+            // Use the shared loader's contextForClass(Class<?>) method which automatically
+            // handles different classloaders for each class in the hierarchy
+            CompilationUnitContext context = this.project.contextForClass(curview.cl);
+            
+            // Match up the comments with the members of this view
+            for (CommentEntry entry : context.getComments()) {
+                String target = entry.getTarget();
 
-            if (curview.cl.getClassLoader() == null) {
-                in = ClassLoader.getSystemResourceAsStream(filename);
-            }
-            else {
-                in = curview.cl.getClassLoader().getResourceAsStream(filename);
-            }
-
-            if(in != null) {
-                comments = new CommentList();
-                comments.load(in);
-                in.close();
-            }
-            //else
-            //    Debug.message("Failed to load .ctxt file " + filename);
-
-        } catch(Exception e) {
-            e.printStackTrace();
-        }
-
-        if(comments != null) {
-            // match up the comments read from the file with the members of this view
-            for(Iterator<Comment> it = comments.getComments(); it.hasNext(); ) {
-                Comment c = it.next();
-
-                if(c.getTarget().startsWith("class ") ||
-                   c.getTarget().startsWith("interface ")) {
-                    // we only want to set a class comment on our base class, not for
-                    // our supers
-                    if (curview == this)
+                if (target.startsWith("class ") || target.startsWith("interface ")) {
+                    // We only want to set a class comment on our base class, not for our supers
+                    if (curview == this) {
+                        // Convert CommentEntry to Comment for backward compatibility
+                        Comment c = convertToComment(entry);
                         setComment(c);
+                    }
                     continue;
                 }
 
-                MemberView m = table.get(c.getTarget());
+                MemberView m = table.get(target);
 
-                if(m == null) {
-                    //Debug.message("No member found for " + c.getTarget() + " in file " + filename);
-                    continue;
-                }
-                else {
-                    //Debug.message("Found member for " + c.getTarget() + " in file " + filename);
+                if (m != null) {
+                    // Convert CommentEntry to Comment for backward compatibility
+                    Comment c = convertToComment(entry);
                     m.setComment(c);
                 }
+                // Removed debug messages for cleaner code
             }
+
+        } catch (Exception e) {
+            // Maintain existing error handling behavior
+            e.printStackTrace();
         }
+    }
+    
+    /**
+     * Converts a CompilationUnitContext.CommentEntry to a Comment object
+     * for backward compatibility with existing code.
+     *
+     * @param entry The CommentEntry to convert
+     * @return A Comment object with the same data
+     */
+    private Comment convertToComment(CommentEntry entry)
+    {
+        Comment comment = new Comment();
+        
+        // Build a Properties object to use the existing Comment.load() method
+        Properties props = new Properties();
+        props.setProperty(".target", entry.getTarget());
+        
+        if (entry.getText() != null) {
+            props.setProperty(".text", entry.getText());
+        }
+        
+        if (!entry.getParamNames().isEmpty()) {
+            props.setProperty(".params", String.join(" ", entry.getParamNames()));
+        }
+        
+        comment.load(props, "");
+        return comment;
     }
 
     private void addMembers(Map<String,MemberView> table, MemberView[] members)

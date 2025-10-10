@@ -212,7 +212,7 @@ public abstract class ClassRole
     @OnThread(Tag.FXPlatform)
     public List<ClassTargetOperation> getClassConstructorOperations(ClassTarget ct, Class<?> cl)
     {
-        View view = View.getView(cl);
+        View view = View.getView(cl, ct.getPackage().getProject());
 
         if (!java.lang.reflect.Modifier.isAbstract(cl.getModifiers())) {
             ViewFilter filter = new ViewFilter(StaticOrInstance.INSTANCE, ct.getPackage().getQualifiedName());
@@ -236,7 +236,7 @@ public abstract class ClassRole
     @OnThread(Tag.FXPlatform)
     public List<ClassTargetOperation> getClassStaticOperations(ClassTarget ct, Class<?> cl)
     {
-        View view = View.getView(cl);
+        View view = View.getView(cl, ct.getPackage().getProject());
 
         ViewFilter filter = new ViewFilter(StaticOrInstance.STATIC, ct.getPackage().getQualifiedName());
         MethodView[] allMethods = view.getAllMethods();
@@ -285,27 +285,6 @@ public abstract class ClassRole
 
     public void run(PkgMgrFrame pmf, ClassTarget ct, String param)
     {}
-
-    /**
-     * Get all the files belonging to a class target - source, class, ctxt, docs
-     * @param ct  The class target
-     * @return  A list of File objects
-     */
-    public List<File> getAllFiles(ClassTarget ct)
-    {
-        // .frame (if available), .java, .class, .ctxt, and doc (.html)
-        List<File> rlist = new ArrayList<>();
-
-        rlist.add(ct.getClassFile());
-        rlist.addAll(Utility.mapList(ct.getAllSourceFilesJavaLast(), sf -> sf.file));
-        rlist.add(ct.getContextFile());
-        rlist.add(ct.getDocumentationFile());
-
-        File [] innerClasses = ct.getInnerClassFiles();
-        Collections.addAll(rlist, innerClasses);
-
-        return rlist;
-    }
 
     /**
      * True if this can be converted to Stride (assuming Java source is available;
