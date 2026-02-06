@@ -2,6 +2,7 @@ plugins {
 	id 'java-library'
 	id 'org.openjfx.javafxplugin'
 	id 'application'
+	id 'io.github.jwharm.flatpak-gradle-generator' version '1.6.0'
 }
 
 dependencies {
@@ -41,6 +42,15 @@ dependencies {
     testImplementation 'org.testfx:testfx-junit:4.0.15-alpha'
     testImplementation 'org.testfx:openjfx-monocle:21.0.2'
     testImplementation 'junit:junit:4.13.2'
+}
+
+tasks.flatpakGradleGenerator {
+    def out = "${rootDir.absolutePath}/${flatpakDir}/dependencies.json"
+    description = "Collect dependencies for Flatpak"
+    outputFile = file(out)
+    downloadDirectory = "./offline-repository"
+    doFirst { println "Generating dependencies.json for flatpak in " + out}
+    doLast { println "Generated dependencies.json for flatpak" }
 }
 
 compileJava {
@@ -85,6 +95,10 @@ test {
 }
 
 repositories {
+    maven {
+        name 'Offline repository for flatpak'
+        url '../offline-repository'
+    }
     mavenCentral()
 }
 
