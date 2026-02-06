@@ -201,6 +201,17 @@ task packageBlueJLinux(type: Exec) {
 }
 packageBlueJLinux.dependsOn assemble
 
+task packageBlueJPreDist(type: Exec) {
+    workingDir "package"
+    commandLine toolProps["ant_exe"], "pre-dist", "-Dmingw_jdk=",
+            "-Dbuild_java_home=" + System.getProperty('java.home'),
+            "-Ddeb_bundled_jdk_path=" + System.getProperty('java.home'),
+            "-Dbluej.version=" + bluejVersion,
+            "-Dbluej.rcsuffix=" + bluejRCSuffix,
+            "-Dbluej_home=" + projectDir.getAbsoluteFile()
+}
+packageBlueJPreDist.dependsOn assemble
+
 task urlsRC(type: Exec) {
     workingDir "package"
     commandLine toolProps["ant_exe"], "-S", "urls-rc",
